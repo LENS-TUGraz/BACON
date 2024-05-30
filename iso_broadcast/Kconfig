@@ -1,0 +1,37 @@
+menu "BACON"
+
+config SHELL_MODE
+	bool "Use bacon demonstration application in shell mode"
+    select SHELL
+	default y
+
+config ONE_WAY_CHAIN_LENGTH
+    int "Length of the utilized lamport chain"
+    default 1000
+
+config PAYLOAD_SIZE_BYTE_DATA
+    int "Default size in byte of the data part [default: LC3 24_2]"
+    default 60
+
+config PAYLOAD_SIZE_BYTE_KEY
+    int "Default size in byte of the BACON key"
+    range 16 16
+    default 16
+    
+config PAYLOAD_SIZE_BYTE_SIGNATURE
+    int "Default size in byte of the BACON signature"
+    range 4 8
+    default 4
+
+config RETRANSMISSIONS
+    int "Number of utilized retransmissions"
+    range 0 2
+    default 2
+
+config RANDOM_SEED
+    bool "Use a random seed for BACON mechanism"
+    default y
+
+endmenu # BACON
+
+source "Kconfig.zephyr"

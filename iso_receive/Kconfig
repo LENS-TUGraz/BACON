@@ -1,0 +1,19 @@
+menu "BACON"
+
+config PAYLOAD_SIZE_BYTE_DATA
+    int "Default size in byte of the data part [default: LC3 24_2]"
+    default 60
+
+config PAYLOAD_SIZE_BYTE_KEY
+    int "Default size in byte of the BACON key"
+    range 16 16
+    default 16
+    
+config PAYLOAD_SIZE_BYTE_SIGNATURE
+    int "Default size in byte of the BACON signature"
+    range 4 8
+    default 4
+
+endmenu # BACON
+
+source "Kconfig.zephyr"

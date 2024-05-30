@@ -1,0 +1,296 @@
+From 575c73ef8e6ab4e8c469b9fd16f59fc766254b8b Mon Sep 17 00:00:00 2001
+From: GatCode <gatcode@wdw.one>
+Date: Fri, 01 Jan 2024 00:00:00 +0000
+Subject: [PATCH 1/1] BACON
+
+---
+ subsys/bluetooth/Kconfig.iso                  |  7 ++
+ .../controller/ll_sw/nordic/lll/lll_adv_iso.c | 46 +++++++++++++
+ .../ll_sw/nordic/lll/lll_sync_iso.c           | 67 +++++++++++++++++--
+ .../bluetooth/controller/ll_sw/ull_adv_iso.c  |  8 +++
+ 4 files changed, 123 insertions(+), 5 deletions(-)
+
+diff --git a/subsys/bluetooth/Kconfig.iso b/subsys/bluetooth/Kconfig.iso
+index 0fc4be1401..6a7cd09c9d 100644
+--- a/subsys/bluetooth/Kconfig.iso
++++ b/subsys/bluetooth/Kconfig.iso
+@@ -150,3 +150,10 @@ config BT_ISO_MAX_BIG
+ 
+ endif # BT_ISO_BROADCAST
+ endif # BT_ISO
++
++config BT_ISO_AUTH
++	bool "Authenticated BIS support [EXPERIMENTAL]"
++	depends on !BT_CTLR || BT_LL_SW_SPLIT
++	select EXPERIMENTAL
++	help
++	  This option enables support authenticated BISes.
+\ No newline at end of file
+diff --git a/subsys/bluetooth/controller/ll_sw/nordic/lll/lll_adv_iso.c b/subsys/bluetooth/controller/ll_sw/nordic/lll/lll_adv_iso.c
+index 20e3fe528e..4fa46f66fb 100644
+--- a/subsys/bluetooth/controller/ll_sw/nordic/lll/lll_adv_iso.c
++++ b/subsys/bluetooth/controller/ll_sw/nordic/lll/lll_adv_iso.c
+@@ -43,6 +43,11 @@
+ 
+ #define TEST_WITH_DUMMY_PDU 0
+ 
++#ifdef CONFIG_BT_ISO_AUTH
++#define CTRL_SUBEVENT_SIZE_BYTE_MAX 8 // based on v5.4
++uint8_t ctrl_subevent_payload[CTRL_SUBEVENT_SIZE_BYTE_MAX] = { 0 };
++#endif
++
+ static int init_reset(void);
+ static void prepare(void *param);
+ static void create_prepare_bh(void *param);
+@@ -331,6 +336,11 @@ static int prepare_cb_common(struct lll_prepare_param *p)
+ 				lll->ctrl_instant = event_counter +
+ 						    lll->ctrl_expire - 1U;
+ 				lll->cssn++;
++#ifdef CONFIG_BT_ISO_AUTH
++			lll->ctrl_expire = CONN_ESTAB_COUNTDOWN + 1;
++			lll->ctrl_instant = event_counter +
++						lll->ctrl_expire - 1U;
++#endif
+ 			}
+ 		} else if (((lll->chm_req - lll->chm_ack) & CHM_STATE_MASK) ==
+ 			   CHM_STATE_REQ) {
+@@ -338,6 +348,10 @@ static int prepare_cb_common(struct lll_prepare_param *p)
+ 			lll->ctrl_expire = CONN_ESTAB_COUNTDOWN;
+ 			lll->ctrl_instant = event_counter + lll->ctrl_expire;
+ 			lll->cssn++;
++#ifdef CONFIG_BT_ISO_AUTH
++			lll->ctrl_expire = CONN_ESTAB_COUNTDOWN + 1;
++			lll->ctrl_instant = event_counter + lll->ctrl_expire;
++#endif
+ 		}
+ 
+ 		lll->ctrl_chan_use = data_chan_use;
+@@ -518,6 +532,17 @@ static void isr_tx_common(void *param,
+ 			   sizeof(struct pdu_big_ctrl_term_ind);
+ 		pdu->ctrl.opcode = PDU_BIG_CTRL_TYPE_TERM_IND;
+ 
++#ifdef CONFIG_BT_ISO_AUTH
++		/* Copy PDU */
++		memcpy(ctrl_subevent_payload, pdu, pdu->len);
++
++		/* Send invalid ctrl packet the first time */
++		uint16_t event_counter = (lll->payload_count / lll->bn) + lll->latency_event;
++		if (event_counter == lll->ctrl_instant - CONN_ESTAB_COUNTDOWN - 1U) {
++			pdu->ctrl.opcode = 0xFF;
++		}
++#endif
++
+ 		term = (void *)&pdu->ctrl.term_ind;
+ 		term->reason = lll->term_reason;
+ 		term->instant = lll->ctrl_instant;
+@@ -527,6 +552,9 @@ static void isr_tx_common(void *param,
+ 		payload_count = lll->payload_count - lll->bn;
+ 		data_chan_use = lll->ctrl_chan_use;
+ 
++		printk("PDU_BIG_CTRL_TYPE_TERM_IND 0x%02x%02x%02x%02x\n", (uint8_t)((char*)pdu)[0], \
++			  (uint8_t)((char*)pdu)[1], (uint8_t)((char*)pdu)[2], (uint8_t)((char*)pdu)[3]);
++
+ 	} else if (((lll->chm_req - lll->chm_ack) & CHM_STATE_MASK) ==
+ 		   CHM_STATE_SEND) {
+ 		/* Transmit the control PDU and stop after 6 intervals
+@@ -546,11 +574,26 @@ static void isr_tx_common(void *param,
+ 		(void)memcpy(chm->chm, lll->chm_chan_map, sizeof(chm->chm));
+ 		chm->instant = lll->ctrl_instant;
+ 
++#ifdef CONFIG_BT_ISO_AUTH
++		/* Copy PDU */
++		memcpy(ctrl_subevent_payload, pdu, pdu->len);
++
++		/* Send invalid ctrl packet the first time */
++		uint16_t event_counter = (lll->payload_count / lll->bn) + lll->latency_event;
++		if (event_counter == lll->ctrl_instant - CONN_ESTAB_COUNTDOWN) {
++			pdu->ctrl.opcode = 0xFF;
++		}
++#endif
++
+ 		/* control subevent to use bis = 0 and se_n = 1 */
+ 		bis = 0U;
+ 		payload_count = lll->payload_count - lll->bn;
+ 		data_chan_use = lll->ctrl_chan_use;
+ 
++		printk("PDU_BIG_CTRL_TYPE_CHAN_MAP_IND 0x%02x%02x%02x%02x %02x%02x%02x%02x\n", \
++			  (uint8_t)((char*)pdu)[0], (uint8_t)((char*)pdu)[1], (uint8_t)((char*)pdu)[2], (uint8_t)((char*)pdu)[3], \
++			  (uint8_t)((char*)pdu)[4], (uint8_t)((char*)pdu)[5], (uint8_t)((char*)pdu)[6], (uint8_t)((char*)pdu)[7]);
++
+ 	} else {
+ 		struct lll_adv_iso_stream *stream;
+ 		uint16_t stream_handle;
+@@ -857,6 +900,9 @@ static void isr_done_term(void *param)
+ 		} else {
+ 			ull_done_extra_type_set(EVENT_DONE_EXTRA_TYPE_ADV_ISO_TERMINATE);
+ 		}
++#ifdef CONFIG_BT_ISO_AUTH
++		memset(ctrl_subevent_payload, 0, CTRL_SUBEVENT_SIZE_BYTE_MAX);
++#endif
+ 	}
+ 
+ 	lll_isr_cleanup(param);
+diff --git a/subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync_iso.c b/subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync_iso.c
+index 12e9fd342b..7607cde644 100644
+--- a/subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync_iso.c
++++ b/subsys/bluetooth/controller/ll_sw/nordic/lll/lll_sync_iso.c
+@@ -37,6 +37,15 @@
+ 
+ #include "hal/debug.h"
+ 
++#ifdef CONFIG_BT_ISO_AUTH
++#define CTRL_SUBEVENT_SIZE_BYTE_MAX 8 // based on v5.4
++#define SHA256_SIZE_BYTE 32
++#define HMAC_SIZE_BYTE 32
++uint8_t ctrl_subevent_key[SHA256_SIZE_BYTE] = { 0 };
++uint8_t ctrl_subevent_signature[HMAC_SIZE_BYTE] = { 0 };
++extern int generate_signature(uint8_t *message, uint8_t message_len, uint8_t *key, uint8_t *signature);
++#endif
++
+ static int init_reset(void);
+ static void prepare(void *param);
+ static void create_prepare_bh(void *param);
+@@ -565,7 +574,8 @@ static void isr_rx(void *param)
+ 		    (lll->ptc_curr == lll->ptc) &&
+ 		    (lll->bis_curr == lll->num_bis) &&
+ 		    lll->ctrl) {
+-			lll->cssn_curr = lll->cssn_next;
++			// Don't switch off - invalid opcodes shall be ignored
++			// lll->cssn_curr = lll->cssn_next;
+ 
+ 			/* Check the dedicated Control PDU buffer */
+ 			pdu = radio_pkt_big_ctrl_get();
+@@ -784,7 +794,7 @@ isr_rx_find_subevent:
+ 				 */
+ 				if (!lll->payload[bis_idx_new][payload_index]) {
+ 					/* bn = 1 Rx PDU not received */
+-					skipped = (bis_idx_new - bis_idx - 1U) *
++					skipped = (bis_idx_new - bis_idx) *
+ 						  ((lll->bn * lll->irc) +
+ 						   lll->ptc);
+ 
+@@ -798,8 +808,7 @@ isr_rx_find_subevent:
+ 					/* bn = 1 Rx PDU already received, skip
+ 					 * subevent.
+ 					 */
+-					skipped = ((bis_idx_new - bis_idx -
+-						    1U) *
++					skipped = ((bis_idx_new - bis_idx) *
+ 						   ((lll->bn * lll->irc) +
+ 						    lll->ptc)) + 1U;
+ 
+@@ -894,7 +903,7 @@ isr_rx_next_subevent:
+ 						&lll->data_chan_prn_s,
+ 						&lll->data_chan_remap_idx);
+ 
+-			skipped -= (bis_idx_new - bis_idx - 1U) *
++			skipped -= (bis_idx_new - bis_idx) *
+ 				   ((lll->bn * lll->irc) + lll->ptc);
+ 		}
+ 
+@@ -1298,20 +1307,43 @@ static void isr_rx_iso_data_invalid(const struct lll_sync_iso *const lll,
+ 	iso_meta->status = 1U;
+ }
+ 
++static uint8_t prev_ctrl_subevent_signature[HMAC_SIZE_BYTE] = { 0 };
++
+ static void isr_rx_ctrl_recv(struct lll_sync_iso *lll, struct pdu_bis *pdu)
+ {
+ 	const uint8_t opcode = pdu->ctrl.opcode;
+ 
+ 	if (opcode == PDU_BIG_CTRL_TYPE_TERM_IND) {
+ 		if (!lll->term_reason) {
++#ifndef CONFIG_BT_ISO_AUTH
+ 			struct pdu_big_ctrl_term_ind *term;
+ 
+ 			term = (void *)&pdu->ctrl.term_ind;
+ 			lll->term_reason = term->reason;
+ 			lll->ctrl_instant = term->instant;
++#else
++			// TODO: fix len problem of pdu
++			uint8_t signature[HMAC_SIZE_BYTE];
++			generate_signature((uint8_t*)pdu, CTRL_SUBEVENT_SIZE_BYTE_MAX, ctrl_subevent_key, signature);
++			if (memcmp(prev_ctrl_subevent_signature, signature, CTRL_SUBEVENT_SIZE_BYTE_MAX) == 0) {
++				printk("Control Subevent (TERM) Authenticated\n");
++				memset(prev_ctrl_subevent_signature, 0, HMAC_SIZE_BYTE);
++				// lll->cssn_curr = lll->cssn_next; // valid - switch off control subevent reception
++
++				struct pdu_big_ctrl_term_ind *term;
++
++				term = (void *)&pdu->ctrl.term_ind;
++				lll->term_reason = term->reason;
++				lll->ctrl_instant = term->instant;
++			} else {
++				printk("Control Subevent (TERM) NOT Authenticated\n");
++			}
++			memcpy(prev_ctrl_subevent_signature, ctrl_subevent_signature, HMAC_SIZE_BYTE);
++#endif
+ 		}
+ 	} else if (opcode == PDU_BIG_CTRL_TYPE_CHAN_MAP_IND) {
+ 		if (!lll->chm_chan_count) {
++#ifndef CONFIG_BT_ISO_AUTH
+ 			struct pdu_big_ctrl_chan_map_ind *chm;
+ 			uint8_t chan_count;
+ 
+@@ -1324,6 +1356,31 @@ static void isr_rx_ctrl_recv(struct lll_sync_iso *lll, struct pdu_bis *pdu)
+ 					     sizeof(lll->chm_chan_map));
+ 				lll->ctrl_instant = chm->instant;
+ 			}
++#else
++			uint8_t signature[HMAC_SIZE_BYTE];
++			generate_signature((uint8_t*)pdu, CTRL_SUBEVENT_SIZE_BYTE_MAX, ctrl_subevent_key, signature);
++			if (memcmp(prev_ctrl_subevent_signature, signature, CTRL_SUBEVENT_SIZE_BYTE_MAX) == 0) {
++				printk("Control Subevent (CHM) Authenticated\n");
++				memset(prev_ctrl_subevent_signature, 0, HMAC_SIZE_BYTE);
++				// lll->cssn_curr = lll->cssn_next; // valid - switch off control subevent reception
++
++				struct pdu_big_ctrl_chan_map_ind *chm;
++				uint8_t chan_count;
++
++				chm = (void *)&pdu->ctrl.chan_map_ind;
++				chan_count =
++					util_ones_count_get(chm->chm, sizeof(chm->chm));
++				if (chan_count >= CHM_USED_COUNT_MIN) {
++					lll->chm_chan_count = chan_count;
++					(void)memcpy(lll->chm_chan_map, chm->chm,
++							sizeof(lll->chm_chan_map));
++					lll->ctrl_instant = chm->instant;
++				}
++			} else {
++				printk("Control Subevent (TERM) NOT Authenticated\n");
++			}
++			memcpy(prev_ctrl_subevent_signature, ctrl_subevent_signature, HMAC_SIZE_BYTE);
++#endif
+ 		}
+ 	} else {
+ 		/* Unknown control PDU, ignore */
+diff --git a/subsys/bluetooth/controller/ll_sw/ull_adv_iso.c b/subsys/bluetooth/controller/ll_sw/ull_adv_iso.c
+index 6191f81131..01d38a2dc4 100644
+--- a/subsys/bluetooth/controller/ll_sw/ull_adv_iso.c
++++ b/subsys/bluetooth/controller/ll_sw/ull_adv_iso.c
+@@ -86,6 +86,10 @@ static struct lll_adv_iso_stream
+ 			stream_pool[CONFIG_BT_CTLR_ADV_ISO_STREAM_COUNT];
+ static void *stream_free;
+ 
++#ifdef CONFIG_BT_ISO_AUTH
++extern uint8_t iso_rtn;
++#endif
++
+ uint8_t ll_big_create(uint8_t big_handle, uint8_t adv_handle, uint8_t num_bis,
+ 		      uint32_t sdu_interval, uint16_t max_sdu,
+ 		      uint16_t max_latency, uint8_t rtn, uint8_t phy,
+@@ -998,7 +1002,11 @@ static uint8_t ptc_calc(const struct lll_adv_iso *lll, uint32_t event_spacing,
+ 		 */
+ 		ptc = MIN(ptc, lll->bn);
+ 
++#ifdef CONFIG_BT_ISO_AUTH
++		return iso_rtn == 0 ? 0 : ptc - 1;
++#else
+ 		return ptc;
++#endif
+ 	}
+ 
+ 	return 0U;
+-- 
+2.44.0
+

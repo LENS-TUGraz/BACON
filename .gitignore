@@ -1,0 +1,10 @@
+.DS_Store
+._.DS_Store
+**/.DS_Store
+**/._.DS_Store
+*/build/*
+reference/*/build/*
+*.swp
+*~
+.vscode
+/iso_broadcast/bin
